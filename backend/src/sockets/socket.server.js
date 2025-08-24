@@ -5,7 +5,6 @@ const userModel=require('../models/user.model')
 const aiService=require('../services/ai.service')
 const messageModel=require('../models/message.model')
 const {createMemory,queryMemory}=require("../services/vector.service");
-const { QueryVectorFromJSON } = require("@pinecone-database/pinecone/dist/pinecone-generated-ts-fetch/db_data");
 
 function setupSocketServer(httpServer){
     const io=new Server(httpServer,{});
@@ -31,19 +30,15 @@ function setupSocketServer(httpServer){
 
         socket.on('ai-message',async(messagePayload)=>{
 
-            const message=await messageModel.create({
+            const [message,vectors]=await Promise.all([
+                messageModel.create({
                 user:socket.user._id,
                 content:messagePayload.content,
                 role:"user",
                 chat:messagePayload.chat
-            })
-
-            const vectors=await aiService.generateVector(messagePayload.content)
-            const memory=await queryMemory({
-                queryVector:vectors,
-                limit:3,
-                metadata:{user:socket.user._id}
-            })
+            }),
+            aiService.generateVector(messagePayload.content)
+            ])
 
             await createMemory({
                 vectors,
@@ -55,9 +50,15 @@ function setupSocketServer(httpServer){
                 }
             })
 
-            const chathistory=(await messageModel.find({
-                chat:messagePayload.chat
-            }).sort({ createdAt: -1 }).limit(20).lean()).reverse()
+            const [memory,chathistory]=await Promise.all([
+                queryMemory({
+                queryVector:vectors,
+                limit:3,
+                metadata:{user:socket.user._id}
+            }),
+                messageModel.find({chat:messagePayload.chat}).sort({ createdAt: -1 }).limit(20).lean()
+                .then(messages => messages.reverse())
+            ])
 
             const stm=chathistory.map(item=>{
                 return {
@@ -68,7 +69,7 @@ function setupSocketServer(httpServer){
 
             const ltm=[
                 {
-                    role:"system",
+                    role:"user",
                     parts:[{text:`those are some previous memory from the chat,use them to generate a response
                         ${memory.map(e=>e.metadata.text).join('\n')}`}]
                 }
@@ -76,14 +77,20 @@ function setupSocketServer(httpServer){
 
             const response=await aiService.generateResponse([...ltm,...stm])
 
-            const responseMessage = await messageModel.create({
+            socket.emit('ai-response',{
+                content:response,
+                chat:messagePayload.chat
+            })
+
+            const [responseMessage,responseVectors]=await Promise.all([
+                messageModel.create({
                 chat: messagePayload.chat,
                 user: socket.user._id,
                 content: response,
                 role: "model"
-            })
-
-            const responseVectors = await aiService.generateVector(response)
+            }),
+            aiService.generateVector(response)
+            ])
 
             await createMemory({
                 vectors: responseVectors,
@@ -93,12 +100,6 @@ function setupSocketServer(httpServer){
                     user: socket.user._id,
                     text: response
                 }
-            })
-
-            
-            socket.emit('ai-response',{
-                content:response,
-                chat:messagePayload.chat
             })
         })
 
