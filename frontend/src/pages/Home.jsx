@@ -1,78 +1,149 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
+import { io } from "socket.io-client";
 import ChatMobileBar from '../components/chat/ChatMobileBar.jsx';
 import ChatSidebar from '../components/chat/ChatSidebar.jsx';
 import ChatMessages from '../components/chat/ChatMessages.jsx';
 import ChatComposer from '../components/chat/ChatComposer.jsx';
-
-const uid = () => Math.random().toString(36).slice(2, 11);
+import { useDispatch, useSelector } from 'react-redux';
+import axios from 'axios';
+import {
+    ensureInitialChat,
+    startNewChat,
+    selectChat,
+    setInput,
+    sendingStarted,
+    sendingFinished,
+    addUserMessage,
+    addAIMessage,
+    setChats
+} from '../store/chatSlice.js';
 
 const Home = () => {
-    // Previous chats list
-    const [chats, setChats] = useState([]); // [{id, title, messages:[{id, role, content, ts}]}]
-    const [activeChatId, setActiveChatId] = useState(null);
-    const [input, setInput] = useState('');
-    const [isSending, setIsSending] = useState(false);
-    const [sidebarOpen, setSidebarOpen] = useState(false); // mobile off-canvas
-
+    const dispatch = useDispatch();
+    const chats = useSelector(state => state.chat.chats);
+    const activeChatId = useSelector(state => state.chat.activeChatId);
+    const input = useSelector(state => state.chat.input);
+    const isSending = useSelector(state => state.chat.isSending);
     const activeChat = chats.find(c => c.id === activeChatId) || null;
     const messages = activeChat ? activeChat.messages : [];
+    const [sidebarOpen, setSidebarOpen] = useState(false);
+    const [socket, setSocket] = useState(null);
 
-    const startNewChat = useCallback(() => {
-        const id = uid();
-        const newChat = { id, title: 'New Chat', messages: [] };
-        setChats(prev => [newChat, ...prev]);
-        setActiveChatId(id);
+    const getMessages = async (chatId) => {
+        const response = await axios.get(
+            `http://localhost:3000/api/chat/${chatId}`,
+            { withCredentials: true }
+        );
+        // Update only the selected chat's messages in Redux
+        dispatch(setChats(
+            chats.map(chat =>
+                chat.id === chatId
+                    ? { ...chat, messages: (response.data.messages || []).map(m => ({
+                        id: m._id || m.id,
+                        role: m.role,
+                        content: m.content,
+                        ts: m.ts || Date.now()
+                    })) }
+                    : chat
+            )
+        ));
+    };
+
+    const handleNewChat = async () => {
+        let title = window.prompt('Enter a title for the new chat:', '');
+        if (title) title = title.trim();
+        if (!title) return;
+
+        const response = await axios.post(
+            "http://localhost:3000/api/chat",
+            { title },
+            { withCredentials: true }
+        );
+
+        getMessages(response.data.chat._id);
+        dispatch(startNewChat({
+            id: response.data.chat._id,
+            title: response.data.chat.title
+        }));
         setSidebarOpen(false);
-    }, []);
+    };
 
-    // Ensure at least one chat exists initially
     useEffect(() => {
-        if (!activeChatId && chats.length === 0) startNewChat();
-    }, [activeChatId, chats.length, startNewChat]);
+        axios.get("http://localhost:3000/api/chat", { withCredentials: true })
+            .then(response => {
+                dispatch(setChats(response.data.chats.reverse()));
+            });
 
-    const updateChat = useCallback((chatId, updater) => {
-        setChats(prev => prev.map(c => (c.id === chatId ? updater(c) : c)));
-    }, []);
+        const tempSocket = io("http://localhost:3000/", { withCredentials: true });
+        setSocket(tempSocket);
 
-    const sendMessage = useCallback(async () => {
+        tempSocket.on("ai-response", (messagePayload) => {
+            dispatch(addAIMessage(activeChatId, messagePayload.content));
+            dispatch(sendingFinished());
+        });
+
+        return () => {
+            tempSocket.disconnect();
+        };
+    }, [dispatch, activeChatId]);
+
+    const sendMessage = useCallback(() => {
         const trimmed = input.trim();
         if (!trimmed || !activeChatId || isSending) return;
-        setIsSending(true);
-        const userMsg = { id: uid(), role: 'user', content: trimmed, ts: Date.now() };
-        updateChat(activeChatId, c => ({
-            ...c,
-            title: c.messages.length === 0 ? trimmed.slice(0, 40) + (trimmed.length > 40 ? '…' : '') : c.title,
-            messages: [...c.messages, userMsg]
-        }));
-        setInput('');
-        try {
-            const reply = await fakeAIReply(trimmed);
-            const aiMsg = { id: uid(), role: 'ai', content: reply, ts: Date.now() };
-            updateChat(activeChatId, c => ({ ...c, messages: [...c.messages, aiMsg] }));
-        } catch {
-            const errMsg = { id: uid(), role: 'ai', content: 'Error fetching AI response.', ts: Date.now(), error: true };
-            updateChat(activeChatId, c => ({ ...c, messages: [...c.messages, errMsg] }));
-        } finally {
-            setIsSending(false);
+        dispatch(sendingStarted());
+        dispatch(addUserMessage(activeChatId, trimmed));
+        dispatch(setInput(''));
+        if (socket) {
+            socket.emit('ai-message', { chat: activeChatId, content: trimmed });
         }
-    }, [input, activeChatId, isSending, updateChat]);
+    }, [input, activeChatId, isSending, dispatch, socket]);
+
+    const handleSelectChat = (chatId) => {
+        dispatch(selectChat(chatId));
+        getMessages(chatId);
+        setSidebarOpen(false);
+    };
+
+    const handleInputChange = (value) => {
+        dispatch(setInput(value));
+    };
+
+    const handleSend = async () => {
+        if (!input.trim()) return;
+        // 1. Add user message to Redux
+        dispatch(addUserMessage(activeChatId, input));
+        dispatch(setInput("")); // clear input
+        dispatch(sendingStarted());
+        try {
+            // 2. Send to backend
+            const res = await axios.post("http://localhost:3000/api/chat/${activeChatId}/messages",
+                { message: input },
+                { withCredentials: true }
+            );
+
+            // 3. Add AI response to Redux
+            dispatch(addAIMessage(activeChatId, res.data.reply));
+        } catch (err) {
+            console.error(err);
+            dispatch(addAIMessage(activeChatId, "⚠️ Error talking to AI", true));
+        } finally {
+            dispatch(sendingFinished());
+        }
+    };
 
     return (
         <div className="h-screen bg-gradient-to-br from-gray-900 to-gray-800 flex flex-col md:flex-row">
-            {/* Mobile bar sticky at top, only on mobile */}
             <ChatMobileBar
                 onToggleSidebar={() => setSidebarOpen(o => !o)}
-                onNewChat={startNewChat}
+                onNewChat={handleNewChat}
             />
-            {/* Sidebar overlays on mobile, fixed on desktop */}
             <ChatSidebar
                 chats={chats}
                 activeChatId={activeChatId}
-                onSelectChat={(id) => { setActiveChatId(id); setSidebarOpen(false); }}
-                onNewChat={startNewChat}
+                onSelectChat={handleSelectChat}
+                onNewChat={handleNewChat}
                 open={sidebarOpen}
             />
-            {/* Sidebar backdrop for mobile overlay, outside sidebar */}
             {sidebarOpen && (
                 <button
                     className="fixed inset-0 bg-black bg-opacity-40 z-30 md:hidden"
@@ -80,9 +151,8 @@ const Home = () => {
                     onClick={() => setSidebarOpen(false)}
                 />
             )}
-            {/* Main chat area, full width on mobile, centered card on desktop */}
-            <main className="flex-1 flex ">
-                <div className="w-full md:max-w-full bg-gray-900 rounded-2xl shadow-lg p-4 sm:p-8  min-h-[60vh] flex flex-col justify-end z-10">
+            <main className="flex-1 flex">
+                <div className="w-full md:max-w-full bg-gray-900 shadow-lg p-4 sm:p-8 min-h-[60vh] flex flex-col justify-end z-10">
                     {messages.length === 0 && (
                         <div className="bg-gradient-to-b from-purple-900 to-gray-900 rounded-2xl shadow p-6 text-center text-purple-300 max-w-md w-full mx-auto mb-4">
                             <div className="inline-block bg-purple-400 text-gray-900 font-bold rounded-full px-4 py-1 text-sm mb-3">Early Preview</div>
@@ -93,7 +163,7 @@ const Home = () => {
                     <ChatMessages messages={messages} isSending={isSending} />
                     <ChatComposer
                         input={input}
-                        setInput={setInput}
+                        setInput={handleInputChange}
                         onSend={sendMessage}
                         isSending={isSending}
                     />

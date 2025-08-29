@@ -15,7 +15,7 @@ app.use(cors({
     credentials:true
 }));
 app.use(express.json());
-app.set(express.urlencoded,{require:true});
+app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser())
 
 //Using Routes

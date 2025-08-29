@@ -23,7 +23,7 @@ const ChatSidebar = ({ chats, activeChatId, onSelectChat, onNewChat, open }) => 
         </div>
         <ul className="flex-1 overflow-y-auto pr-2 scrollbar-hide">
             {chats.length === 0 && <div className="text-gray-400 text-sm">No chats yet.</div>}
-            {chats.map((chat) => (
+            {Array.isArray(chats) && chats.map((chat) => (
                 <li
                     key={chat.id}
                     className={`py-2 px-3 rounded-lg cursor-pointer text-gray-200 font-medium mb-1 transition-colors ${
@@ -32,11 +32,19 @@ const ChatSidebar = ({ chats, activeChatId, onSelectChat, onNewChat, open }) => 
                     onClick={() => onSelectChat(chat.id)}
                 >
                     <div className="font-bold text-base truncate">{chat.title}</div>
-                    <div className="text-xs text-gray-400">{chat.messages.length} messages</div>
+                    <div className="text-xs text-gray-400">{Array.isArray(chat.messages) ? chat.messages.length : 0} messages</div>
                 </li>
             ))}
         </ul>
-            <button className='rounded bg-red-500 text-amber-50 px-2 py-1 w-fit text-[0.6rem] flex justify-end'>Log out</button>
+            <button
+                className='rounded bg-red-500 text-amber-50 cursor-pointer px-2 py-1 w-fit text-[0.6rem] flex justify-end'
+                onClick={() => {
+                    document.cookie = 'token=; Max-Age=0; path=/;';
+                    window.location.reload();
+                }}
+            >
+                Log out
+            </button>
     </aside>
 );
 

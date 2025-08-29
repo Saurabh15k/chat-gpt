@@ -32,7 +32,7 @@ const ChatComposer = ({ input, setInput, onSend, isSending }) => {
             />
             <button
                 type="submit"
-                className="px-3 py-2 sm:px-4 sm:py-3 bg-purple-600 text-white font-bold rounded-xl shadow hover:bg-purple-700 transition-colors flex items-center"
+                className="px-3 py-2 sm:px-4 sm:py-3 bg-purple-600 text-white font-bold rounded-xl cursor-pointer shadow hover:bg-purple-700 transition-colors flex items-center"
                 disabled={isSending || !input.trim()}
                 aria-label="Send message"
             >

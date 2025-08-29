@@ -1,10 +1,19 @@
-const express=require('express');
-const authMiddlewares=require('../middlewares/auth.middleware');
-const chatControllers=require('../controllers/chat.controller');
+const express = require('express');
+const authMiddlewares = require('../middlewares/auth.middleware');
+const chatControllers = require('../controllers/chat.controller');
 
-const router=express.Router();
+const router = express.Router();
 
 router.route('/')
-    .post(authMiddlewares.authUser,chatControllers.createChat);
+    .get(authMiddlewares.authUser, chatControllers.getChats)
+    .post(authMiddlewares.authUser, chatControllers.createChat);
 
-module.exports=router;
+router.route('/:chatId')
+    .get(authMiddlewares.authUser, chatControllers.getChatMessages);
+
+// add this
+router.post('/:chatId/messages', authMiddlewares.authUser, chatControllers.sendMessage);
+
+
+    
+module.exports = router;
